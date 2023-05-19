@@ -14,7 +14,6 @@ def yes_or_no(question):
 def delete_tables(cursor):
     try:
         cursor.execute("""  
-            DROP TABLE IF EXISTS clientemail;
             DROP TABLE IF EXISTS email;
             DROP TABLE IF EXISTS phone;
             DROP TABLE IF EXISTS client;
@@ -34,23 +33,19 @@ def create_structure_db(cursor):
 
         CREATE TABLE IF NOT EXISTS Email (
         mail_id SERIAL PRIMARY KEY,
-        email VARCHAR(120) NOT NULL);
+        email VARCHAR(120) NOT NULL,
+        client_id INTEGER REFERENCES Client(client_id));
 
         CREATE TABLE IF NOT EXISTS Phone (
         phone_id SERIAL PRIMARY KEY,
         client_id INTEGER REFERENCES Client(client_id),
         number DECIMAL DEFAULT 70000000000);
-
-        CREATE TABLE IF NOT EXISTS ClientEmail (
-        client_id INTEGER REFERENCES Client(client_id),
-        mail_id INTEGER REFERENCES Email(mail_id),
-        CONSTRAINT client_email PRIMARY KEY (client_id, mail_id));
         """)
     print('Успешно')
 
 
 # Добавление нового клиента
-def add_client(cursor, first_name: str, second_name: str, email: str):
+def add_client(cursor, first_name: str, second_name: str, email: str, phone=70000000000):
     try:
         cursor.execute("""
             INSERT INTO Client(first_name, second_name)
@@ -60,62 +55,64 @@ def add_client(cursor, first_name: str, second_name: str, email: str):
             SELECT client_id, first_name, second_name FROM Client 
             WHERE first_name=%s AND second_name=%s
             """, (first_name, second_name))
-        client = cursor.fetchall()
+        client = cursor.fetchall()[0]
 
-        phone_or_without = yes_or_no('Будете указывать номер телефона?')
-        if phone_or_without == 'да':
-            number = int(input('Введите номер телефона: '))
+        if phone != 70000000000:
             cursor.execute("""
                 INSERT INTO Phone(client_id, number)
                 VALUES (%s, %s)
-                """, (client[0][0], number))
+                """, (client[0], phone))
         else:
             cursor.execute("""
                 INSERT INTO Phone(client_id, number)
                 VALUES (%s, DEFAULT)
-                """, (client[0][0],))
+                """, (client[0],))
         cursor.execute("""
-            INSERT INTO Email(email)
-            VALUES (%s)
-            """, (email,))
-
-        cursor.execute("""
-            SELECT mail_id FROM Email WHERE email=%s
-            """, (email,))
-        mail = cursor.fetchall()
-        cursor.execute("""
-            INSERT INTO ClientEmail(client_id, mail_id)
+            INSERT INTO Email(email, client_id)
             VALUES (%s, %s)
-            """, (client[0][0], mail[0][0]))
-        print(f'Клиент "{client[0][1]} {client[0][2]}" добавлен успешно!')
+            """, (email, client[0]))
+        conn.commit()
+        print(f'Клиент "{client[1]} {client[2]}" добавлен успешно!')
     except(Exception, Error) as error:
         print('Не удалось добавить клиента', error)
 
 
 # Добавление телефона существующему клиенту
-def add_phone(cursor, first_name: str, second_name: str, number):
+def add_phone(cursor, first_name: str, second_name: str, phone):
     try:
         # проверка на наличие клиента
         cursor.execute("""
             SELECT client_id, first_name, second_name FROM Client
             WHERE first_name=%s AND second_name=%s
             """, (first_name, second_name))
-        sel = cursor.fetchall()
-
-        if sel[0][1] == first_name and sel[0][2] == second_name:
-            # если клиент есть, добавить его номер телефона
+        found_client = cursor.fetchall()[0]
+        print(found_client)
+        if found_client[1] == first_name and found_client[2] == second_name:
+            # если найден клиент, проверить наличие номера
             cursor.execute("""
-                INSERT INTO Phone(client_id, number)
-                VALUES (%s, %s)
-                """, (sel[0][0], number))
-            # финальная проверка на добавление в БД необходимого нам номера
+                SELECT number FROM Phone p
+                JOIN client c ON p.client_id = c.client_id
+                WHERE first_name=%s AND second_name=%s
+                """, (first_name, second_name, phone))
+            found_number = cursor.fetchall()[0]
+            if found_number[0] == phone:
+                print('Этот номер уже определен у клиента')
+            elif found_number[0] == 70000000000:  # заменить дефолтный на фактический
+                cursor.execute("""
+                    UPDATE Phone SET number=%s WHERE client_id=%s
+                    """, (phone, found_client[0]))
+            else:
+                cursor.execute("""
+                    INSERT INTO Phone(client_id, number)
+                    VALUES (%s, %s)
+                    """, (found_client[0], phone))
             cursor.execute("""
-                SELECT client_id, number FROM Phone 
+                SELECT number FROM Phone 
                 WHERE client_id=%s AND number=%s
-                """, (sel[0][0], number))
-            result = cursor.fetchall()
-            print(f'Клиенту "{first_name} {second_name}" успешно добавлен номер: {result[0][1]}')
-        else:
+                """, (found_client[0], phone))
+            result = cursor.fetchall()[0]
+            print(f'Клиенту "{first_name} {second_name}" успешно добавлен номер: {result[0]}')
+        else:  # помогите Даше найти клиента... (・_・;)
             print('Клиент не найден. Проверьте корректность введённых данных')
     except(Exception, Error) as error:
         print('Операция завершена с ошибкой', error)
@@ -125,19 +122,19 @@ def add_phone(cursor, first_name: str, second_name: str, number):
 def update_client(cursor):
     try:
         print('Для изменения данных')
-        first_name = input('Укажите имя клиента: ')
-        second_name = input('Укажите фамилию клиента: ')
+        first_name = input('Укажите имя клиента: ').capitalize()
+        second_name = input('Укажите фамилию клиента: ').capitalize()
         cursor.execute("""
             SELECT first_name, second_name FROM Client
             WHERE first_name=%s AND second_name=%s
-            """, (first_name.capitalize(), second_name.capitalize()))
-        found_client = cursor.fetchall()
+            """, (first_name, second_name))
+        found_client = cursor.fetchall()[0]
 
-        if found_client[0][0] == first_name and found_client[0][1] == second_name:
+        if found_client[0] == first_name and found_client[1] == second_name:
             print(''' Клиент найден.\n
-                Чтобы изменить данные в БД Вам необходимо указать ключи к данным,
-                которые желаете редактировать
-                Внимание!!! ключи указывать строго через пробел и без знаков препинания!
+                Чтобы определить изменяемые данные в БД Вам необходимо указать ключи,
+                Внимание!!! 
+                ключи указывать строго кириллицей, через пробел и без знаков препинания!
                 Например: и ф т
                 где:
                 и - имя;
@@ -169,17 +166,17 @@ def update_client(cursor):
                         cursor.execute("""
                             SELECT number FROM Phone WHERE number=%s
                             """, (old_number,))
-                        tmp = cursor.fetchall()
+                        tmp = cursor.fetchall()[0]
 
-                        if tmp[0][0] == old_number:
+                        if tmp[0] == old_number:
                             cursor.execute("""
                                 UPDATE Phone SET number=%s WHERE number=%s
                                 """, (new_phone, old_number))
                             cursor.execute("""
                                 SELECT phone_id, number FROM Phone WHERE number=%s
                                 """, (new_phone,))
-                            phone_result = cursor.fetchall()
-                            print(f'Теперь под id: {phone_result[0][0]} находится номер: {phone_result[0][1]}')
+                            phone_result = cursor.fetchall()[0]
+                            print(f'Теперь под id: {phone_result[0]} находится номер: {phone_result[1]}')
                         else:
                             print('Такого номера нет в БД, можно добавить новый номер вместо замены')
                             need_add_phone = yes_or_no('Добавляем?')
@@ -203,14 +200,13 @@ def update_client(cursor):
             if new_email:
                 cursor.execute("""
                     SELECT email FROM Client c
-                    JOIN ClientEmail ce ON ce.client_id = c.client_id
-                    JOIN Email e on e.mail_id = ce.mail_id
+                    JOIN Email e on e.client_id = c.client_id
                     WHERE first_name=%s AND second_name=%s
                     """, (first_name, second_name))
-                old_email = cursor.fetchall()
+                old_email = cursor.fetchall()[0]
                 cursor.execute("""
                     UPDATE Email SET email=%s WHERE email=%s
-                    """, (new_email, old_email[0][0]))
+                    """, (new_email, old_email[0]))
         else:
             print('Клиент не найден.')
     except(Exception, Error) as error:
@@ -223,17 +219,18 @@ def update_client(cursor):
 #     DELETE FROM Client WHERE first_name=%s AND second_name=%s""", ('Вася', 'Пупкин'))
 
 
-with pg.connect(database='personal_data', user='postgres', password='MAXpayne23018975') as conn:
+with pg.connect(database='personal_data', user='postgres', password='postgres') as conn:
     with conn.cursor() as cur:
 
         # delete_tables(cur)
 
         # create_structure_db(cur)
 
-        # add_client(cur, 'Алёша', 'Попович', 'Alenushka1love@ooo-boratyr.ru')
+        # add_client(cur, 'Алёша', 'Попович', 'Alenushka1love@ooo-boratyr.ru', phone=79645437821)
         # add_client(cur, 'Илья', 'Муромец', 'Ilya33@ooo-boratyr.ru')
-        # add_client(cur, 'Добрыня', 'Никитич', 'WhereMySyrname@ooo-boratyr.ru')
+        # add_client(cur, 'Добрыня', 'Никитич', 'WhereIsMySyrname@ooo-boratyr.ru')
 
-        # add_phone(cur, 'Вася', 'Пупкин', 79645437821)
+        add_phone(cur, 'Илья', 'Муромец', 88005553535)  # замена дефолтного номера
+        add_phone(cur, 'Алёша', 'Попович', 87772281488)  # добавление номера
 
         # update_client(cur)
